@@ -240,6 +240,7 @@ class _VictimBase:
         dynamically during training.
         """
         from .training import run_step_combined
+        from collections import defaultdict
         
         self.model.train()
         
@@ -248,10 +249,10 @@ class _VictimBase:
         
         # Check if epochs_budget exists before using it
         if hasattr(self.args, 'epochs_budget') and self.args.epochs_budget is not None:
-            epochs = epochs * self.args.epochs_budget
+            epochs = int(epochs * self.args.epochs_budget)
         
         # Use the existing optimizer and scheduler from the model initialization
-        stats = {}
+        stats = defaultdict(list)
         for epoch in range(epochs):
             run_step_combined(kettle, None, loss_fn, epoch, stats, self.model, self.defs, 
                             self.criterion, self.optimizer, self.scheduler)

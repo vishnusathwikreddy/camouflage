@@ -41,6 +41,47 @@ def get_optimizers(model, args, defs):
 
 def run_step(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion, optimizer, scheduler, ablation=True):
 
+    # Add debug information about data composition at epoch 0
+    if epoch == 0:
+        print("="*60)
+        print("DATA FLOW DEBUG - Training Step Information")
+        print("="*60)
+
+        # Determine which loader is being used
+        if kettle.args.ablation < 1.0:
+            loader = kettle.partialloader
+            print(f"Using partial loader with {len(loader.dataset)} samples")
+        else:
+            loader = kettle.trainloader
+            print(f"Using full trainloader with {len(loader.dataset)} samples")
+
+        # Check poison information
+        if poison_delta is not None:
+            print(f"Poison delta shape: {poison_delta.shape}")
+            print(f"Poison lookup size: {len(kettle.poison_lookup)}")
+            print(f"Poison IDs: {len(kettle.poison_ids) if hasattr(kettle, 'poison_ids') else 'N/A'}")
+        else:
+            print("No poison delta - CLEAN TRAINING")
+
+        # Check camouflage information
+        if hasattr(kettle, 'camouflage_ids') and kettle.camouflage_ids is not None:
+            print(f"Camouflage IDs: {len(kettle.camouflage_ids)}")
+            if hasattr(kettle, 'camouflage_lookup'):
+                print(f"Camouflage lookup size: {len(kettle.camouflage_lookup)}")
+        else:
+            print("No camouflage data")
+
+        # Check if we're using combined dataset
+        if hasattr(loader.dataset, 'clean_indices'):
+            print("USING COMBINED DATASET:")
+            print(f"  Clean samples: {len(loader.dataset.clean_indices)}")
+            print(f"  Poison samples: {len(loader.dataset.poison_indices) if hasattr(loader.dataset, 'poison_indices') else 0}")
+            print(f"  Camouflage samples: {len(loader.dataset.camouflage_indices) if hasattr(loader.dataset, 'camouflage_indices') else 0}")
+        else:
+            print(f"USING STANDARD DATASET: {type(loader.dataset).__name__}")
+
+        print("="*60)
+
     epoch_loss, total_preds, correct_preds = 0, 0, 0
     if DEBUG_TRAINING:
         data_timer_start = torch.cuda.Event(enable_timing=True)
@@ -62,6 +103,8 @@ def run_step(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion
     else:
         loader = kettle.trainloader
 
+    poison_count_total, camouflage_count_total = 0, 0
+    
     for batch, (inputs, labels, ids) in enumerate(loader):
         # Prep Mini-Batch
         model.train()
@@ -76,6 +119,7 @@ def run_step(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion
             forward_timer_start.record()
 
         # Add adversarial pattern
+        poison_count_batch, camouflage_count_batch = 0, 0
         if poison_delta is not None:
             poison_slices, batch_positions = [], []
             for batch_id, image_id in enumerate(ids.tolist()):
@@ -83,12 +127,22 @@ def run_step(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion
                 if lookup is not None:
                     poison_slices.append(lookup)
                     batch_positions.append(batch_id)
+                    poison_count_batch += 1
+                    
+                # Also check for camouflage
+                if hasattr(kettle, 'camouflage_lookup') and kettle.camouflage_lookup is not None:
+                    cam_lookup = kettle.camouflage_lookup.get(image_id)
+                    if cam_lookup is not None:
+                        camouflage_count_batch += 1
             # Python 3.8:
             # twins = [(b, l) for b, i in enumerate(ids.tolist()) if l:= kettle.poison_lookup.get(i)]
             # poison_slices, batch_positions = zip(*twins)
 
             if batch_positions:
                 inputs[batch_positions] += poison_delta[poison_slices].to(**kettle.setup)
+        
+        poison_count_total += poison_count_batch
+        camouflage_count_total += camouflage_count_batch
 
         # Add data augmentation
         if defs.augmentations:  # defs.augmentations is actually a string, but it is False if --noaugment
@@ -147,6 +201,16 @@ def run_step(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion
             break
     if defs.scheduler == 'linear':
         scheduler.step()
+    
+    # Print data flow summary for epoch 0
+    if epoch == 0:
+        print("="*60)
+        print("EPOCH 0 DATA FLOW SUMMARY:")
+        print(f"Total samples processed: {total_preds}")
+        print(f"Poison samples found: {poison_count_total}")
+        print(f"Camouflage samples found: {camouflage_count_total}")
+        print(f"Clean samples: {total_preds - poison_count_total - camouflage_count_total}")
+        print("="*60)
 
     if epoch % defs.validate == 0 or epoch == (defs.epochs - 1):
         valid_acc, valid_loss = run_validation(model, criterion, kettle.validloader, kettle.setup, kettle.args.dryrun)
@@ -212,8 +276,131 @@ def check_targets(model, criterion, targetset, intended_class, original_class, s
             predictions_clean = torch.argmax(outputs, dim=1)
             accuracy_clean = (predictions == original_labels).sum().float() / predictions.size(0)
 
-            # print(f'Raw softmax output is {torch.softmax(outputs, dim=1)}, intended: {intended_class}')
+            # Print actual predictions for clarity
+            print(f'TARGET PREDICTIONS: Model predicts target as class {predictions[0].item()}, '
+                  f'True class: {original_labels[0].item()}, Intended attack class: {intended_labels[0].item()}')
 
         return accuracy_intended.item(), loss_intended.item(), accuracy_clean.item(), loss_clean.item()
     else:
         return 0, 0, 0, 0
+
+def run_step_combined(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion, optimizer, scheduler, ablation=True):
+    """Execute one step of training with a combined dataset.
+    
+    This function handles training where poison and camouflage perturbations
+    are already applied to the samples in the dataset.
+    """
+    from ..consts import NON_BLOCKING
+    
+    DEBUG_TRAINING = epoch == 0  # Only debug first epoch
+    
+    if DEBUG_TRAINING:
+        print("="*60)
+        print("COMBINED DATASET TRAINING - Step Information")
+        print("="*60)
+        
+        # Determine which loader is being used
+        if kettle.args.ablation < 1.0:
+            loader = kettle.partialloader
+            print(f"Using partial loader with {len(loader.dataset)} samples")
+        else:
+            loader = kettle.trainloader
+            print(f"Using full trainloader with {len(loader.dataset)} samples")
+
+        # Check if we're using combined dataset
+        if hasattr(loader.dataset, 'poison_indices'):
+            print("USING COMBINED DATASET:")
+            print(f"  Clean samples: {len(loader.dataset.clean_indices) if hasattr(loader.dataset, 'clean_indices') else 'Unknown'}")
+            print(f"  Poison samples: {len(loader.dataset.poison_indices) if hasattr(loader.dataset, 'poison_indices') else 0}")
+            print(f"  Camouflage samples: {len(loader.dataset.camouflage_indices) if hasattr(loader.dataset, 'camouflage_indices') else 0}")
+        else:
+            print(f"USING STANDARD DATASET: {type(loader.dataset).__name__}")
+
+        print("="*60)
+
+    epoch_loss, total_preds, correct_preds = 0, 0, 0
+    
+    if kettle.args.ablation < 1.0:
+        loader = kettle.partialloader
+    else:
+        loader = kettle.trainloader
+
+    poison_count_total, camouflage_count_total = 0, 0
+    
+    for batch, (inputs, labels, ids) in enumerate(loader):
+        # Prep Mini-Batch
+        model.train()
+        optimizer.zero_grad()
+
+        # Transfer to GPU
+        inputs = inputs.to(**kettle.setup)
+        labels = labels.to(dtype=torch.long, device=kettle.setup['device'], non_blocking=NON_BLOCKING)
+
+        # For combined dataset, perturbations are already applied
+        # Just count poison and camouflage samples for statistics
+        poison_count_batch, camouflage_count_batch = 0, 0
+        
+        for image_id in ids.tolist():
+            if hasattr(kettle, 'poison_lookup') and kettle.poison_lookup.get(image_id) is not None:
+                poison_count_batch += 1
+            elif hasattr(kettle, 'camouflage_lookup') and kettle.camouflage_lookup.get(image_id) is not None:
+                camouflage_count_batch += 1
+        
+        poison_count_total += poison_count_batch
+        camouflage_count_total += camouflage_count_batch
+
+        # Add data augmentation
+        if defs.augmentations:
+            inputs = kettle.augment(inputs)
+
+        # Execute
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+
+        # Record statistics
+        epoch_loss += loss.item()
+        predicted = torch.argmax(outputs.data, dim=1)
+        total_preds += labels.size(0)
+        correct_preds += (predicted == labels).sum().item()
+
+        loss.backward()
+        optimizer.step()
+
+        if defs.scheduler in ['cyclic']:
+            scheduler.step()
+
+        if kettle.args.dryrun:
+            break
+
+    if DEBUG_TRAINING:
+        print("="*60)
+        print(f"EPOCH {epoch} COMBINED DATASET SUMMARY:")
+        print(f"Total samples processed: {total_preds}")
+        print(f"Poison samples found: {poison_count_total}")
+        print(f"Camouflage samples found: {camouflage_count_total}")
+        print(f"Clean samples: {total_preds - poison_count_total - camouflage_count_total}")
+        print("="*60)
+
+    if epoch % defs.validate == 0 or epoch == (defs.epochs - 1):
+        valid_acc, valid_loss = run_validation(model, criterion, kettle.validloader, kettle.setup, kettle.args.dryrun)
+        target_acc, target_loss, target_clean_acc, target_clean_loss = check_targets(
+            model, criterion, kettle.targetset, kettle.poison_setup['intended_class'],
+            kettle.poison_setup['target_class'],
+            kettle.setup)
+    else:
+        valid_acc, valid_loss = None, None
+        target_acc, target_loss, target_clean_acc, target_clean_loss = [None] * 4
+
+    current_lr = optimizer.param_groups[0]['lr']
+    print_and_save_stats(epoch, stats, current_lr, epoch_loss / (batch + 1), correct_preds / total_preds,
+                         valid_acc, valid_loss, target_acc, target_loss, target_clean_acc, target_clean_loss)
+
+    if defs.scheduler in ['multiplicative', 'step', 'multiStep', 'exponential', 'reduceOnPlateau']:
+        if defs.scheduler == 'reduceOnPlateau':
+            scheduler.step(epoch_loss / total_preds)
+        else:
+            scheduler.step()
+
+    if kettle.args.dryrun:
+        # Just report dryrun results
+        return stats

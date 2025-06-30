@@ -103,6 +103,15 @@ def options():
     parser.add_argument('--dryrun', action='store_true')
     parser.add_argument('--save', default=None, help='Export poisons into a given format. Options are full/limited/automl/numpy.')
 
+    # Camouflage generation options:
+    parser.add_argument('--enable_camouflage', action='store_true', help='Enable camouflage generation for defense against poison detection.')
+    parser.add_argument('--camouflage_budget', default=0.01, type=float, help='Fraction of training data to use for camouflage generation.')
+    parser.add_argument('--camouflage_eps', default=None, type=float, help='Perturbation budget for camouflage samples. Defaults to --eps.')
+    parser.add_argument('--camouflage_key', default=None, type=int, help='Random seed for camouflage sample selection.')
+    parser.add_argument('--camouflage_init', default=None, type=str, help='Camouflage initialization method. Defaults to --init.')
+    parser.add_argument('--camouflage_restarts', default=None, type=int, help='Number of restarts for camouflage optimization. Defaults to --restarts.')
+    parser.add_argument('--camouflage_iter', default=None, type=int, help='Number of iterations for camouflage optimization. Defaults to --attackiter.')
+
     # Distributed Computations
     parser.add_argument("--local_rank", default=None, type=int, help='Distributed rank. This is an INTERNAL ARGUMENT! '
                                                                      'Only the launch utility should set this argument!')

@@ -152,3 +152,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+/poisons
+
+*.pth
+
+./paper_experiments
+

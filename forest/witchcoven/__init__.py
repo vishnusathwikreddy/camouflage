@@ -1,5 +1,6 @@
 """Interface for poison recipes."""
 from .witch_matching import WitchGradientMatching, WitchGradientMatchingNoisy
+from .witch_camouflage import WitchCamouflage
 from .witch_metapoison import WitchMetaPoison
 from .witch_watermark import WitchWatermark
 from .witch_poison_frogs import WitchFrogs
@@ -26,4 +27,9 @@ def Witch(args, setup=dict(device=torch.device('cpu'), dtype=torch.float)):
         raise NotImplementedError()
 
 
-__all__ = ['Witch']
+def CamouflageWitch(args, setup, poisoned_model):
+    """Create a camouflage generator with the given poisoned model."""
+    return WitchCamouflage(args, setup, poisoned_model)
+
+
+__all__ = ['Witch', 'CamouflageWitch']

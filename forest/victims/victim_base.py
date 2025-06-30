@@ -90,6 +90,21 @@ class _VictimBase:
         print('Model re-initialized to initial seed.')
         return self._iterate(kettle, poison_delta=poison_delta)
 
+    def retrain_combined(self, kettle, poison_delta, camouflage_delta):
+        """Check poison and camouflage on the initialization it was brewed on.
+        
+        Args:
+            kettle: Data handler containing all datasets
+            poison_delta: Poison perturbations
+            camouflage_delta: Camouflage perturbations
+            
+        Returns:
+            Training statistics
+        """
+        self.initialize(seed=self.model_init_seed)
+        print('Model re-initialized to initial seed.')
+        return self._iterate_combined(kettle, poison_delta, camouflage_delta)
+    
     def validate(self, kettle, poison_delta):
         """Check poison on a new initialization(s)."""
         run_stats = list()
@@ -97,6 +112,16 @@ class _VictimBase:
             self.initialize()
             print('Model reinitialized to random seed.')
             run_stats.append(self._iterate(kettle, poison_delta=poison_delta))
+
+        return average_dicts(run_stats)
+
+    def validate_combined(self, kettle, poison_delta, camouflage_delta):
+        """Validate poison and camouflage on new initialization(s)."""
+        run_stats = list()
+        for runs in range(self.args.vruns):
+            self.initialize()
+            print('Model reinitialized to random seed.')
+            run_stats.append(self._iterate_combined(kettle, poison_delta, camouflage_delta))
 
         return average_dicts(run_stats)
 
@@ -126,3 +151,112 @@ class _VictimBase:
     def _step(self, kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion, optimizer, scheduler):
         """Single epoch. Can't say I'm a fan of this interface, but ..."""
         run_step(kettle, poison_delta, loss_fn, epoch, stats, model, defs, criterion, optimizer, scheduler)
+
+    def _iterate_combined(self, kettle, poison_delta, camouflage_delta):
+        """Train model with both poison and camouflage perturbations.
+        
+        This method creates a proper combined dataset that includes:
+        - Clean samples (excluding base images used for poison/camouflage)
+        - Poison samples (clean base + poison perturbations)  
+        - Camouflage samples (clean base + camouflage perturbations)
+        
+        This ensures no double-counting of base images.
+        """
+        print(f"DEBUG: Starting _iterate_combined")
+        print(f"DEBUG: poison_delta shape: {poison_delta.shape if poison_delta is not None else 'None'}")
+        print(f"DEBUG: camouflage_delta shape: {camouflage_delta.shape if camouflage_delta is not None else 'None'}")
+        
+        # Store original data for restoration
+        original_trainloader = kettle.trainloader
+        original_poison_lookup = kettle.poison_lookup.copy()
+        original_poison_ids = kettle.poison_ids.clone()
+        
+        print(f"DEBUG: Original poison IDs: {len(original_poison_ids)}")
+        
+        try:
+            # Check if we have valid camouflage data
+            has_camouflage = (camouflage_delta is not None and 
+                            len(camouflage_delta) > 0 and 
+                            hasattr(kettle, 'camouflage_ids') and 
+                            kettle.camouflage_ids is not None and
+                            len(kettle.camouflage_ids) > 0)
+            
+            print(f"DEBUG: has_camouflage = {has_camouflage}")
+            
+            if has_camouflage:
+                print(f"DEBUG: Camouflage IDs: {len(kettle.camouflage_ids)}")
+                
+                # Verify dimensions match
+                if len(poison_delta) != len(kettle.poison_ids):
+                    raise ValueError(f"Poison delta length ({len(poison_delta)}) doesn't match poison IDs ({len(kettle.poison_ids)})")
+                if len(camouflage_delta) != len(kettle.camouflage_ids):
+                    raise ValueError(f"Camouflage delta length ({len(camouflage_delta)}) doesn't match camouflage IDs ({len(kettle.camouflage_ids)})")
+                
+                # Check for overlapping IDs
+                poison_set = set(kettle.poison_ids.tolist())
+                camouflage_set = set(kettle.camouflage_ids.tolist())
+                overlap = poison_set.intersection(camouflage_set)
+                if overlap:
+                    print(f"WARNING: Found {len(overlap)} overlapping IDs between poison and camouflage: {list(overlap)[:10]}...")
+                
+                # Create combined dataset using the proper method
+                print("DEBUG: Creating combined dataset with proper clean/poison/camouflage separation")
+                combined_dataset, combined_loader = kettle.get_combined_dataset(poison_delta, camouflage_delta)
+                
+                # Temporarily replace the trainloader
+                kettle.trainloader = combined_loader
+                
+                print(f'DEBUG: Training with combined dataset: {len(combined_dataset)} total samples')
+                print(f'DEBUG: - Clean samples: {len(combined_dataset.clean_indices)}')
+                print(f'DEBUG: - Poison samples: {len(combined_dataset.poison_indices)}')
+                print(f'DEBUG: - Camouflage samples: {len(combined_dataset.camouflage_indices)}')
+                
+                # Train with combined dataset using specialized method
+                stats = self._iterate_combined_dataset(kettle, poison_delta, camouflage_delta)
+            else:
+                print('DEBUG: No camouflage samples, training with poison only')
+                stats = self._iterate(kettle, poison_delta)
+                
+        except Exception as e:
+            print(f"ERROR in _iterate_combined: {e}")
+            print(f"ERROR: Falling back to standard training method with combined dataset")
+            stats = self._iterate(kettle, poison_delta)
+            
+        finally:
+            # Restore original data
+            print(f"DEBUG: Restoring original trainloader and poison lookup")
+            kettle.trainloader = original_trainloader
+            kettle.poison_lookup = original_poison_lookup
+            kettle.poison_ids = original_poison_ids
+            
+        print(f"DEBUG: _iterate_combined completed")
+        return stats
+
+    def _iterate_combined_dataset(self, kettle, poison_delta=None, camouflage_delta=None):
+        """Train model using a combined dataset where perturbations are pre-applied.
+        
+        This method handles training with a combined dataset where poison and camouflage
+        perturbations are already applied to the samples, so we don't need to apply them
+        dynamically during training.
+        """
+        from .training import run_step_combined
+        
+        self.model.train()
+        
+        loss_fn = torch.nn.CrossEntropyLoss()
+        epochs = self.defs.epochs
+        
+        # Check if epochs_budget exists before using it
+        if hasattr(self.args, 'epochs_budget') and self.args.epochs_budget is not None:
+            epochs = epochs * self.args.epochs_budget
+        
+        # Use the existing optimizer and scheduler from the model initialization
+        stats = {}
+        for epoch in range(epochs):
+            run_step_combined(kettle, None, loss_fn, epoch, stats, self.model, self.defs, 
+                            self.criterion, self.optimizer, self.scheduler)
+            
+            if self.args.dryrun:
+                break
+        
+        return stats

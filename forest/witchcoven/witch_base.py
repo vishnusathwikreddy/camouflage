@@ -160,7 +160,8 @@ class _Witch():
             # and makes it easier to let pytorch track momentum.
             if self.args.attackoptim in ['Adam', 'signAdam', 'momSGD', 'momPGD']:
                 if self.args.attackoptim in ['momPGD', 'signAdam']:
-                    poison_delta.grad.sign_()
+                    if poison_delta.grad is not None:
+                        poison_delta.grad.sign_()
                 att_optimizer.step()
                 if self.args.scheduling:
                     scheduler.step()

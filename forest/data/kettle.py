@@ -501,9 +501,9 @@ class Kettle():
             data['poison_setup'] = self.poison_setup
             data['poison_delta'] = poison_delta
             data['poison_ids'] = self.poison_ids
-            data['target_images'] = [data for data in self.targetset]
+            data['target_images'] = [target for target in self.targetset]
             name = f'poisons_packed_{datetime.date.today()}.pth'
-            torch.save([poison_delta, self.poison_ids], os.path.join(path, name))
+            torch.save(data, os.path.join(path, name))
 
         elif mode == 'limited':
             # Save training set
@@ -766,11 +766,11 @@ class Kettle():
             data['camouflage_setup'] = {
                 'camouflage_ids': self.camouflage_ids,
                 'camouflage_lookup': self.camouflage_lookup,
-                'target_labels': [data[1] for data in self.targetset]
+                'target_labels': [target[1] for target in self.targetset]
             }
             data['camouflage_delta'] = camouflage_delta
             data['camouflage_ids'] = self.camouflage_ids
-            data['target_images'] = [data for data in self.targetset]
+            data['target_images'] = [target for target in self.targetset]
             
             filename = f'camouflages_packed_{datetime.date.today()}.pth'
             torch.save(data, os.path.join(path, filename))

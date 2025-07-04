@@ -239,61 +239,9 @@ if __name__ == "__main__":
     
     print(f"DEBUG: Final camouflage_delta shape: {camouflage_delta.shape}")
     
-    # Model Validation
-    print("\n" + "="*60)
-    print("STEP 6: MODEL VALIDATION")
-    print("="*60)
-    
-    # Retrain validation (optional)
-    if not args.pretrained and args.retrain_from_init:
-        print('Performing retrain validation...')
-        if args.enable_camouflage:
-            print("DEBUG: Using camouflage - calling retrain_combined")
-            stats_rerun = validation_model.retrain_combined(data, poison_delta, camouflage_delta)
-        else:
-            print("DEBUG: No camouflage - calling regular retrain")
-            stats_rerun = validation_model.retrain(data, poison_delta)
-    else:
-        stats_rerun = None
-    
-    # Transfer model validation (optional)
-    if args.vnet is not None:
-        print(f'Validating on transfer model {args.vnet}...')
-        train_net = args.net
-        args.net = args.vnet
-        if args.vruns > 0:
-            transfer_model = forest.Victim(args, setup=setup)
-            if args.enable_camouflage:
-                print("DEBUG: Transfer model - using camouflage")
-                try:
-                    stats_results = transfer_model.validate_combined(data, poison_delta, camouflage_delta)
-                except Exception as e:
-                    print(f"ERROR: validate_combined failed for transfer model: {e}")
-                    print("DEBUG: Falling back to regular validate")
-                    stats_results = transfer_model.validate(data, poison_delta)
-            else:
-                print("DEBUG: Transfer model - no camouflage")
-                stats_results = transfer_model.validate(data, poison_delta)
-        else:
-            stats_results = None
-        args.net = train_net
-    else:
-        # Validate main model
-        if args.vruns > 0:
-            print('Validating main model...')
-            if args.enable_camouflage:
-                print("DEBUG: Main model - using camouflage")
-                try:
-                    stats_results = validation_model.validate_combined(data, poison_delta, camouflage_delta)
-                except Exception as e:
-                    print(f"ERROR: validate_combined failed for main model: {e}")
-                    print("DEBUG: Falling back to regular validate")
-                    stats_results = validation_model.validate(data, poison_delta)
-            else:
-                print("DEBUG: Main model - no camouflage")
-                stats_results = validation_model.validate(data, poison_delta)
-        else:
-            stats_results = None
+    # Set default values for removed validation step
+    stats_rerun = None
+    stats_results = None
     
     end_time = time.time()
     
@@ -304,7 +252,6 @@ if __name__ == "__main__":
         poisoned_train_time=str(datetime.timedelta(seconds=poisoned_train_time - poison_time)).replace(',', '') if args.enable_camouflage else 'N/A',
         camouflage_time=str(datetime.timedelta(seconds=camouflage_time - poisoned_train_time)).replace(',', '') if args.enable_camouflage else 'N/A',
         final_train_time=str(datetime.timedelta(seconds=final_train_time - camouflage_time)).replace(',', '') if args.enable_camouflage else 'N/A',
-        validation_time=str(datetime.timedelta(seconds=end_time - final_train_time)).replace(',', ''),
         total_time=str(datetime.timedelta(seconds=end_time - start_time)).replace(',', '')
     )
     
@@ -317,7 +264,7 @@ if __name__ == "__main__":
             'poisoned_model_stats': stats_poisoned,
             'final_model_stats': stats_final,
             'camouflage_info': {
-                'num_camouflage_samples': len(data.camouflage_ids) if data.camouflage_ids is not None else 0,
+                'num_camouflage_samples': len(data.camouflage_ids) if hasattr(data, "camouflage_ids") and data.camouflage_ids is not None else 0,
                 'camouflage_budget': args.camouflage_budget,
                 'camouflage_eps': args.camouflage_eps,
             }
@@ -346,14 +293,13 @@ if __name__ == "__main__":
         print(f'Poisoned model training time: {timestamps["poisoned_train_time"]}')
         print(f'Camouflage generation time: {timestamps["camouflage_time"]}')
         print(f'Final model training time: {timestamps["final_train_time"]}')
-        print(f'Number of camouflage samples: {len(data.camouflage_ids) if data.camouflage_ids is not None else 0}')
-    print(f'Validation time: {timestamps["validation_time"]}')
+        print(f'Number of camouflage samples: {len(data.camouflage_ids) if hasattr(data, "camouflage_ids") and data.camouflage_ids is not None else 0}')
     print(f'Total workflow time: {timestamps["total_time"]}')
     print(f'Optimal poison loss: {witch.stat_optimal_loss:6.4e}')
     
     print("\nGenerated files:")
     print(f'- Poison data: {args.poison_path}')
-    if args.enable_camouflage and len(data.camouflage_ids) > 0:
+    if args.enable_camouflage and hasattr(data, "camouflage_ids") and data.camouflage_ids is not None and len(data.camouflage_ids) > 0:
         print(f'- Camouflage data: {args.poison_path}')
     print(f'- Model states: {args.poison_path}')
     

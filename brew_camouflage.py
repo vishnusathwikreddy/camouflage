@@ -30,15 +30,56 @@ if args.deterministic:
 
 def save_model_state(model, path, name):
     """Save model state dict to file."""
+    print(f"DEBUG: save_model_state called with path={path}, name={name}")
+    print(f"DEBUG: model type: {type(model)}")
+    
     os.makedirs(path, exist_ok=True)
     filepath = os.path.join(path, f'{name}.pth')
+    
     if hasattr(model, 'module'):  # Handle DataParallel
         state_dict = model.module.state_dict()
+        print(f"DEBUG: Using DataParallel model, state_dict keys: {len(state_dict)}")
     else:
         state_dict = model.state_dict()
-    torch.save(state_dict, filepath)
-    print(f'Model saved to {filepath}')
-    return filepath
+        print(f"DEBUG: Using regular model, state_dict keys: {len(state_dict)}")
+    
+    print(f"DEBUG: state_dict type: {type(state_dict)}")
+    print(f"DEBUG: state_dict size: {len(state_dict) if state_dict else 'None'}")
+    
+    # Check if state_dict has content
+    if state_dict:
+        first_key = next(iter(state_dict))
+        first_tensor = state_dict[first_key]
+        print(f"DEBUG: First parameter '{first_key}' shape: {first_tensor.shape}")
+        print(f"DEBUG: First parameter size: {first_tensor.numel()} elements")
+    
+    try:
+        print(f"DEBUG: About to save to {filepath}")
+        torch.save(state_dict, filepath)
+        
+        # Verify the save worked
+        if os.path.exists(filepath):
+            file_size = os.path.getsize(filepath)
+            print(f"DEBUG: Model file created: {filepath}, size: {file_size} bytes")
+            
+            # Try to load it back to verify it's valid
+            try:
+                test_load = torch.load(filepath, map_location='cpu')
+                print(f"DEBUG: Model file verification: loaded {len(test_load)} keys successfully")
+            except Exception as e:
+                print(f"ERROR: Model file verification failed: {e}")
+        else:
+            print(f"ERROR: Model file was not created: {filepath}")
+            
+        print(f'Model saved to {filepath}')
+        return filepath
+        
+    except Exception as e:
+        print(f"ERROR: Failed to save model: {e}")
+        print(f"ERROR: Exception type: {type(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 def load_model_state(model, filepath):
@@ -86,9 +127,26 @@ if __name__ == "__main__":
     witch = forest.Witch(args, setup=setup)
     poison_delta = witch.brew(model, data)
     
-    # Export poison data
+    # Export poison data - always export in packed mode for camouflage workflow
+    print(f"DEBUG: About to export poison data...")
+    print(f"DEBUG: args.save = {args.save}")
+    print(f"DEBUG: args.poison_path = {args.poison_path}")
+    print(f"DEBUG: poison_delta shape = {poison_delta.shape if poison_delta is not None else 'None'}")
+    print(f"DEBUG: poison_delta type = {type(poison_delta)}")
+    print(f"DEBUG: len(data.poison_ids) = {len(data.poison_ids) if hasattr(data, 'poison_ids') else 'No poison_ids'}")
+    
+    # Ensure poison_path directory exists
+    if not os.path.exists(args.poison_path):
+        os.makedirs(args.poison_path, exist_ok=True)
+        print(f"DEBUG: Created directory {args.poison_path}")
+    
     if args.save is not None:
+        print(f"DEBUG: Calling export_poison with mode={args.save}")
         data.export_poison(poison_delta, path=args.poison_path, mode=args.save)
+    else:
+        # Always export in packed mode for camouflage workflow
+        print("DEBUG: args.save is None, exporting in packed mode")
+        data.export_poison(poison_delta, path=args.poison_path, mode='packed')
     
     poison_time = time.time()
     

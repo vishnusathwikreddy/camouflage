@@ -503,7 +503,23 @@ class Kettle():
             data['poison_ids'] = self.poison_ids
             data['target_images'] = [target for target in self.targetset]
             name = f'poisons_packed_{datetime.date.today()}.pth'
+            
+            # Debug information
+            print(f'DEBUG: Saving poison data to {os.path.join(path, name)}')
+            print(f'DEBUG: poison_delta shape: {poison_delta.shape if poison_delta is not None else "None"}')
+            print(f'DEBUG: poison_ids length: {len(self.poison_ids) if self.poison_ids is not None else "None"}')
+            print(f'DEBUG: data dict keys: {list(data.keys())}')
+            
             torch.save(data, os.path.join(path, name))
+            print(f'DEBUG: torch.save completed for {name}')
+            
+            # Verify the file was created and has content
+            file_path = os.path.join(path, name)
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                print(f'DEBUG: File created successfully: {file_path}, size: {file_size} bytes')
+            else:
+                print(f'ERROR: File was not created: {file_path}')
 
         elif mode == 'limited':
             # Save training set

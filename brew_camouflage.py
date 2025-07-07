@@ -213,7 +213,7 @@ if __name__ == "__main__":
             
             # Export camouflage data
             if len(camouflage_delta) > 0:
-                data.export_camouflage(camouflage_delta, path=args.poison_path, mode='packed')
+                data.export_camouflage(camouflage_delta, path=args.poison_path, mode=args.save)
                 print(f"DEBUG: Camouflage data exported to {args.poison_path}")
             else:
                 print("DEBUG: No camouflage data to export")

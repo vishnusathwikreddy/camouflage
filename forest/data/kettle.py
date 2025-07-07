@@ -596,7 +596,7 @@ class Kettle():
 
         elif mode == 'benchmark':
             foldername = f'{self.args.name}_{"_".join(self.args.net)}'
-            sub_path = os.path.join(path, 'benchmark_results', foldername, str(self.args.benchmark_idx))
+            sub_path = os.path.join(path, 'benchmark_results', foldername, str(self.args.benchmark_idx), "poisons") # save poisons and camouflages in different folders
             os.makedirs(sub_path, exist_ok=True)
 
             # Poisons
@@ -774,6 +774,15 @@ class Kettle():
             image_PIL = PIL.Image.fromarray(image_torch_uint8.numpy())
             return image_PIL
 
+        def _save_image(input, label, idx, location, train=True):
+            """Save input image to given location, add poison_delta if necessary."""
+            filename = os.path.join(location, str(idx) + '.png')
+
+            lookup = self.camouflage_lookup.get(idx)
+            if (lookup is not None) and train:
+                input += camouflage_delta[lookup, :, :, :]
+            _torch_to_PIL(input).save(filename)
+
         if mode == 'packed':
             # Ensure directory exists
             os.makedirs(path, exist_ok=True)
@@ -791,6 +800,53 @@ class Kettle():
             filename = f'camouflages_packed_{datetime.date.today()}.pth'
             torch.save(data, os.path.join(path, filename))
             print(f'Camouflage exported in packed mode to {os.path.join(path, filename)}')
+        
+        elif mode == 'full':
+            # Save training set
+            names = self.trainset.classes
+            for name in names:
+                os.makedirs(os.path.join(path, 'train', name), exist_ok=True)
+                os.makedirs(os.path.join(path, 'test', name), exist_ok=True)
+                os.makedirs(os.path.join(path, 'targets', name), exist_ok=True)
+            for input, label, idx in self.trainset:
+                _save_image(input, label, idx, location=os.path.join(path, 'train', names[label]), train=True)
+            print('Camouflage training images exported ...')
+
+            for input, label, idx in self.validset:
+                _save_image(input, label, idx, location=os.path.join(path, 'test', names[label]), train=False)
+            print('Unaffected validation images exported ...')
+
+            # Save secret targets
+            for enum, (target, _, idx) in enumerate(self.targetset):
+                intended_class = self.poison_setup['intended_class'][enum]
+                _save_image(target, intended_class, idx, location=os.path.join(path, 'targets', names[intended_class]), train=False)
+            print('Target images exported with intended class labels ...')
+
+
+        elif mode == 'benchmark':
+            foldername = f'{self.args.name}_{"_".join(self.args.net)}'
+            sub_path = os.path.join(path, 'benchmark_results', foldername, str(self.args.benchmark_idx), "camouflages")  # save poisons and camouflages in different folders
+            os.makedirs(sub_path, exist_ok=True)
+
+            # Poisons
+            benchmark_camouflages = []
+            for lookup, key in enumerate(self.camouflage_lookup.keys()):  # This is a different order than we usually do for compatibility with the benchmark
+                input, label, _ = self.trainset[key]
+                input += camouflage_delta[lookup, :, :, :]
+                benchmark_camouflages.append((_torch_to_PIL(input), int(label)))
+
+            with open(os.path.join(sub_path, 'camouflages.pickle'), 'wb+') as file:
+                pickle.dump(benchmark_camouflages, file, protocol=pickle.HIGHEST_PROTOCOL)
+
+            # Target
+            target, target_label, _ = self.targetset[0]
+            with open(os.path.join(sub_path, 'target.pickle'), 'wb+') as file:
+                pickle.dump((_torch_to_PIL(target), target_label), file, protocol=pickle.HIGHEST_PROTOCOL)
+
+            # Indices
+            with open(os.path.join(sub_path, 'base_indices.pickle'), 'wb+') as file:
+                pickle.dump(self.camouflage_ids, file, protocol=pickle.HIGHEST_PROTOCOL)
+
 
         else:
             print(f'Camouflage export mode {mode} not yet implemented. Using packed mode.')
